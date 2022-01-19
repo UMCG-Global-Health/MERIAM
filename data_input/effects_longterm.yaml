@@ -1,0 +1,18 @@
+---
+utility_decrement:
+    cap:
+        start_age: 65
+        end_age: 120
+        value: -0.13
+        reference: Mangen 2017
+excess_mortality:
+    cap:
+        start_age: 65
+        end_age: 120
+        relative_risk: 6.7
+        relative_risk_sd: .3
+        dist_function: rlnorm
+        reference: Mangen 2017
+---
+
+

@@ -1,0 +1,37 @@
+---
+base:
+  abx_prescribing:
+    value: 1
+    lwr: 1
+    upr: 1
+    distribution: none
+  test:
+    name: hypothetical
+    p: 0
+    cost: 5
+    year: 2019
+conservative:
+  abx_prescribing:
+    value: 0.79
+    lwr: 0.70
+    upr: 0.90
+    distribution: lognormal
+    reference: Martinez-Gonzales, 2020
+  test:
+    name: hypothetical
+    p: 1
+    cost: 10
+    year: 2019
+uncertain:
+  abx_prescribing:
+    value: 0.79
+    lwr: 0.70
+    upr: 0.90
+    distribution: lognormal
+    reference: Martinez-Gonzales, 2020
+  test:
+    name: hypothetical
+    p: 1
+    cost: 5
+    year: 2019
+---

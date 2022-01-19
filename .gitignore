@@ -1,0 +1,23 @@
+.Rproj.user
+.checkpoint/*
+data_output/*
+data_input/ecdc/*.csv
+data_input/ecdc/*.RDS
+data_input/generated/*
+data_input/microsim_data/ppas/*.csv
+man/Manual_files/figure-gfm/*
+data_input/uk_data/*.xml
+data_input/uk_data/*.xlsx
+data_input/uti/10.1007_978-94-007-7596-1.pdf
+data_input/uti/base_utilities.RDS
+data_input/amr/data_projections/*_historical.csv
+rsconnect/shinyapps.io/simonvanderpol/MERIAM.dcf
+data_input/amr/amr_forecasts.RDS
+Appendices/Reducing antimicrobial resistance by point-of-care diagnostics in the Netherlands/amr_export.RDS
+Appendices/Reducing antimicrobial resistance by point-of-care diagnostics in the Netherlands/consumption projections - 2021-03-22.RDS
+data_input/amr/amr_historical.csv
+*.png
+.Rhistory
+data_input/un/WPP2019_Life_Table_Medium.csv
+data_input/un/WPP2019_PopulationBySingleAgeSex_2020-2100.csv
+appendices/crp_nl/nul

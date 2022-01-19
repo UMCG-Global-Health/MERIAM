@@ -1,0 +1,108 @@
+---
+#hierarchy of document:
+#strategy
+  #transition
+    #values
+all:
+  p_sc:
+    function: TRUE
+    dist: lognormal
+    value: estimate_p_sc.R
+    data:
+    dependency: based on illness-duration
+    reference: Vos et al 2020
+  p_sh:
+    function: FALSE
+    dist: rlnorm
+    value: .1
+    data:
+    dependency: none
+    reference: none
+  p_si:
+    function: FALSE
+    dist: none
+    value: 0
+    data:
+    dependency: none
+    reference: none
+  p_sd:
+    function: FALSE
+    dist: none
+    value: .01
+    data:
+    dependency: none
+    reference: none
+  p_hs:
+    function: FALSE
+    dist: none
+    value: 0
+    data:
+    dependency: none
+    reference: none
+  p_hi:
+    function: FALSE
+    dist: none
+    value: 0
+    data:
+    dependency: none
+    reference: none
+  p_hc:
+    function: TRUE
+    dist: none
+    value: estimate_p_hc.R
+    data: hospital_los.csv
+    dependency: dependent on sex, age, reason for hospitalization
+    reference: Mangen 2017, Eurostat
+  p_hd:
+    function: FALSE
+    dist: none
+    value: .1
+    data:
+    dependency: none
+    reference: none
+  p_is:
+    function: FALSE
+    dist: none
+    value: 0
+    data:
+    dependency: none
+    reference: none  
+  p_ih:
+    function: FALSE
+    dist: none
+    value: .2
+    data:
+    dependency: none
+    reference: none
+  p_id:
+    function: FALSE
+    dist: none
+    value: .2
+    data:
+    dependency: none
+    reference: none
+crp:
+  p_ic:
+    function: FALSE
+    dist: none
+    value: .05
+    data:
+    dependency: none
+    reference: none
+pct: 
+  p_ic: 
+    function: FALSE
+    dist: none
+    value: .1
+    data:
+    dependency: none
+    reference: none
+base:
+  p_ic:
+    function: FALSE
+    dist: none
+    value: .05
+    data:
+    dependency: none
+    reference: none
+---

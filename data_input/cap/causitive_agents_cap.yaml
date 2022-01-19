@@ -1,0 +1,8 @@
+---
+cap:
+    Staphylococcus pneumoniae:
+        mean: 0.1597
+        alpha: 277
+        beta: 1458
+        ref: Postma et al. 2015
+---

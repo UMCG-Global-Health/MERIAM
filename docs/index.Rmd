@@ -1,0 +1,1240 @@
+---
+title: "Technical manual MERIAM"
+output: 
+  bookdown::html_document2: 
+    toc: yes
+    toc_float: yes
+    number_sections: yes
+    code_folding: hide
+  
+bibliography: bibliography.bib
+---
+
+# Overview
+
+```{=html}
+<style>
+  .anchor-section {
+    visibility: hidden !important;
+    color: white !important;
+  }
+  .anchor-section:hover {
+    visibility: hidden !important;
+    color: white !important;
+  }
+</style>
+```
+```{r setup, include=FALSE, echo = FALSE}
+checkpoint_date <- "2021-07-20"
+checkpoint::checkpoint(
+  checkpoint_date, 
+  checkpoint_location = "C:/git/meriam")
+
+library(knitr)
+opts_knit$set(root.dir = "C:/git/meriam")
+knitr::opts_chunk$set(echo = FALSE)
+
+packages <- c("yaml",
+              "compiler",
+              "magrittr",
+              "tibble",
+              "dplyr",
+              "tidyr",
+              "purrr",
+              "furrr",
+              "forcats",
+              "stringr",
+              "readxl",
+              "readr",
+              "countrycode",
+              "lubridate",
+              "doFuture",
+              "doRNG",
+              "truncnorm",
+              "ggplot2",
+              "AMR",
+              "incidence")
+
+packages_markdown <- c("scales",
+                       "reactable",
+                       "gt",
+                       "knitr",
+                       "rmarkdown",
+                       "patchwork",
+                       "kableExtra")
+
+lapply(packages, require, character.only = TRUE)
+lapply(packages_markdown, require, character.only = TRUE)
+
+valuePalette <- c("#207BA3", "#0FB4A0", "#5D0EB5", "#FAB669", "#CC2866", "#004064", "#006F5F", "#ff7abd")
+
+currency_year <- 2019
+euro <- dollar_format(prefix = "\u20ac", accuracy = 1)
+
+country <- "nl"
+
+#set GGplot theme:
+theme_set(theme_minimal())
+
+#set reactable theme
+
+options(reactable.theme = reactableTheme(
+  borderColor = "#dfe2e5",
+  stripedColor = "#f6f8fa",
+  highlightColor = "#f0f5f9",
+  cellPadding = "8px 12px",
+  style = list(fontFamily = "Segoe UI, Helvetica, Arial, sans-serif"),
+  searchInputStyle = list(width = "100%")
+))
+
+plan(sequential)
+```
+
+MERIAM (Modelling the Economics of Respiratory tract Infections and AMr) is a model built to assess the long-term health-economic effects of improved diagnostics for community-acquired acute respiratory tract infections at the first point of care. The model is developed within the [VALUE-Dx](https://value-dx.eu/) project.
+
+![Image: model overview](fig/overview_model.png)
+
+MERIAM has three compartments: the demographic model, used to model the population over a long time horizon; the consultation model, used to model patients going to care with an acute respiratory tract infection and the antimicrobial resistance (AMR) model, used to forecast AMR levels and AMR-related mortality and costs.
+
+The demographic model contains a representative sample of the modelled country. The consultation model uses incidence data to simulate the care-seeking behaviour for community-acquired respiratory tract infections of a subset of individuals from the demographic model and their outcomes, including costs, quality-adjusted life years (QALYs) and antibiotic consumption. The AMR model uses antibiotic consumption data to forecast AMR levels.
+
+The time framework of this model is as follows:
+
+-   Individuals may seek care for respiratory complaints, with associated costs and health outcomes. Currently, only weeks during the influenza season are included (week 40 - 20).
+-   After the influenza season (after week 20), demographic changes are applied (background mortality, babies born, migration etc.)
+-   Predict antimicrobial resistance (AMR) - not yet implemented
+-   Repeat for the requested number of years
+
+Below are instructions to run the model and a description of the technical aspects of the model.
+
+# Setting up the R environment
+
+The current R version in use for MERIAM is `r R.version.string`. The Checkpoint package is used to be able to use packages in a reproducible manner, this forces all packages to use the version as published on CRAN on `r stamp("1 June, 2020", quiet = TRUE)(parse_date(checkpoint_date))`.
+
+An overview of the included packages is displayed below:
+
+```{r}
+all_packages <- c("checkpoint", packages, packages_markdown)
+
+authors <- map(all_packages, ~format(citation(.x)$author, include = c("given", "family"))) %>%
+  map_chr(~str_c(.x, collapse = ", "))
+
+
+tibble(Package = c("checkpoint", packages, packages_markdown)) %>%
+  mutate(Use = c(rep("Main model", length(packages) + 1), rep("Documentation", length(packages_markdown))),
+          Version = map_chr(Package, ~as.character(packageVersion(.x))),
+         Authors = authors,
+         Package = ifelse(Use == "Documentation", str_c(Package, "*"), Package)) %>%
+  arrange(desc(Use), Package) %>%
+  select(-Use) %>%
+  reactable()
+```
+
+\*: indicates that the package is only used to display results in this Documentation, and not to compute the main model.
+
+```{r, include = FALSE, echo = FALSE}
+source("functions/stats.R") #load population functions
+source("functions/pop.R") #load population functions
+source("functions/consults.R") #load careseek functions
+source("functions/ppas.R") #load antibiotic prescription functions
+source("functions/productivity.R") #load productivity functions
+source("functions/model_data-import.R") #load functions to load data
+source("functions/microsim.R") #load microsim functions
+source("functions/amr.R") #load AMR functions
+```
+
+# Input data
+
+```{r, include = FALSE, echo = FALSE}
+data <- create_data(n_nodes = 1000,
+                    country_list = "nl",
+                    strategy_list = c("base", "crp"),
+                    rollout = c(1, .5),
+                    start_year = 2020,
+                    n_years = 1,
+                    included_weeks = 1:52,
+                    currency_year = 2019,
+                    productivity_method = "friction",
+                    use_corrected_mortality = TRUE,
+                    probabilistic = FALSE,
+                    iterations = 1)
+```
+
+## VALUE-Dx data
+
+### PPAS
+
+The VALUE-Dx point-prevalence audit survey (PPAS) contains patient-level data for many European countries regarding patients seeking care at the general practitioner for acute respiratory complaints. Used in MERIAM are data on:
+
+-   Patient characteristics
+
+    -   Proportion of patients that are under 5 years old
+
+-   Number and types of diagnostic tests
+
+-   Antibiotics
+
+    -   Number of prescriptions
+    -   Delayed prescriptions
+    -   Type of antibiotic
+
+## Automated data sources
+
+The script datagen.R will automatically download all required population data from external sources and save it in the data_input folder. In principle, these data should be available for all EU countries.
+
+### Population data
+
+Population data is used to populate the model with a realistic sample of a country.
+
+```{r}
+tibble(data = c("Population projections", "Migration rates", "Mortality rates", "Hospital length of stay", "Influenza vaccination status", "Employment", "Education", "Pensions"),
+       `used for` = c("Population, sex, age, fertility", "Migration", "Mortality", "Probability of hospital discharge (microsimulation)", "Influenza status in the elderly", rep("Employment status",3)),
+       id = c("proj_19np", "proj_19nanmig", "proj_19naasmr", "hlth_co_inpst", "hlth_ps_immu", "une_rt_a", "educ_uoe_enra05", "lfsq_ipga"),
+       source = c(rep("Eurostat",8))) %>%
+  reactable(striped = TRUE)
+```
+
+## Financial data
+
+### Methods to convert to common currency {#currency_methods}
+
+The harmonized index of consumer prices is used to convert all costs to a single reference year. This is published by Eurostat (dataset id: "prc_hicp_midx").
+
+To convert all country currencies to a common currency, Purchasing Power Parities (PPP) for GDP are used. This process corrects the price level differences between countries. Euro for the 27 EU countries is used as the reference. More information can be found on the [Eurostat website](https://ec.europa.eu/eurostat/web/purchasing-power-parities/overview).
+
+The function convert_currency() is used to automate this process, see an example below, which uses the costs of a [GP consult](#costs_consults) as an example. This function also allows for currency conversions (using Eurostat dataset: "ert_bil_eur_m" and OECD dataset: "SNA_TABLE4") and the output in PPP corrected US Dollars.
+
+```{r, warning = FALSE}
+consult_cost_data <- read_csv("data_input/microsim_data/costs_consults.csv",
+                          col_types = cols(country = col_character()))
+
+ eurostat_data <- list(cpi = read.csv("data_input/financial/cpi.csv"),
+                                               ppp = read.csv("data_input/financial/ppp.csv"),
+                                               exchange_rate = read.csv("data_input/financial/exchange_rates.csv"))
+
+consult_cost_data %>% 
+  filter(item == "GP consult") %>%
+  rename(`original cost` = cost, `currency reference year` = curyear) %>%
+  mutate(`cost in 2019 (local currency)` = euro(convert_price(`original cost`, 
+                                                              "nl", 
+                                                              `currency reference year`,
+                                                              2019,
+                                                              input = c("local", "EUR"),
+                                                              output = c("local", "EUR"),
+                                                              eurostat_data)),
+         `cost in 2019 (euro ppp)` = euro(convert_price(`original cost`, 
+                                                              "nl", 
+                                                              `currency reference year`,
+                                                              2019,
+                                                              input = c("local", "EUR"),
+                                                              output = c("ppp", "EUR"),
+                                                              eurostat_data)),
+         `cost in 2019 (USD ppp)` = euro(convert_price(`original cost`, 
+                                                              "nl", 
+                                                              `currency reference year`,
+                                                              2019,
+                                                              input = c("local", "EUR"),
+                                                              output = c("ppp", "USD"),
+                                                              eurostat_data)),
+country = countrycode(country, origin = "iso2c", destination = "country.name"),
+`original cost` = euro(`original cost`)) %>%
+  select(country, `original cost`, `currency reference year`, `cost in 2019 (local currency)`, `cost in 2019 (euro ppp)`, `cost in 2019 (USD ppp)`) %>% reactable(striped = TRUE)
+```
+
+### Labour costs {#data_labour}
+
+For employed persons, average daily labour costs are estimated using two Eurostat tables: total annual labour costs ("lc_ncost_r2") and average annual hours worked per employee ("lc_nnum2_r2"). Averages are used for each country, using the aggregate consisting of "Industry, construction and services (except public administration, defense, compulsory social security)" and including all employers with 10 employees or more. Two methods are used to estimate productivity losses: the friction period method and the human capital method [@krolHowEstimateProductivity2014]. For the human capital approach, losses are mainly considered from the perspective of the worker, while the friction cost method considers losses due to lost productivity for the employer [@krolHowEstimateProductivity2014; @koopmanschapFrictionCostMethod1995]. For the friction cost method, we did not consider the possible elasticity between labour and production [@krolHowEstimateProductivity2014].
+
+For unpaid work, we assumed this to be valued at the hourly wages at the minimum wage level (if available). Hourly cost of unpaid work are calculated using the "minimum wage as a proportion of average monthly earnings" dataset ("earn_mw_avgr2"), which is related to the hourly earnings for employed persons (using the datasets described above). Please note that the minimum wages data is not available for all countries. This results in the following data (converted to `r currency_year` euros, corrected for PPP):
+
+```{r}
+readRDS("data_input/generated/wages.RDS") %>%
+  filter(geo %in% c("at", "be", "de", "ee", "gr", "es", "fi", "fr", "ie", "it", "lu", "nl", "pt", "ro", "si")) %>%
+  rowwise() %>%
+  mutate(labour_cost_daily = euro(convert_price(labour_cost_daily, geo, year, currency_year, c("local", "EUR"), c("ppp", "EUR"))), 
+         wages_minimum_hourly = euro(convert_price(wages_minimum_hourly, geo, year, currency_year, c("local", "EUR"), c("ppp", "EUR"))),
+         geo = countrycode(geo, origin = "iso2c", destination = "country.name")) %>%
+  select(-year, -labour_cost_hourly, -wages_daily) %>%
+  remove_missing(na.rm = TRUE, vars = "labour_cost_daily") %>%
+  rename(Country = geo,
+         `Average daily costs of labour (corrected for ppp)` = labour_cost_daily,
+         `Hourly costs of unpaid work (corrected for ppp)` = wages_minimum_hourly) %>%
+  reactable(striped = TRUE)
+```
+
+## Data from other sources
+
+Some data used in the model are derived from literature.
+
+### Utilities {#data_base_utilities}
+
+```{r, include = FALSE, echo = FALSE}
+uti <- read_yaml("data_input/microsim_data/microsim_utilities.yaml")
+```
+
+EuroQol-5D (EQ-5D) population norms are used, stratified by different age groups and sex [@szendeSelfReportedPopulationHealth2014]. Three different value sets are included in the model, depending on their availability, the following value sets can be selected:
+
+-   Country-specific time-trade-off (TTO)
+
+-   Visual Analogue Scale (VAS)
+
+    -   Country-specific
+    -   European value set
+
+Children and adolescents(under 18) are assumed to have a utility of 1. The utilities are assumed to follow a beta distribution.
+
+```{r}
+
+readRDS("data_input/uti/base_utilities.RDS") %>%
+  filter(sex != "total", geo != "uk-england") %>%
+  mutate(agecat = str_c(minage," - ",maxage),
+         country = countrycode(geo, origin = "iso2c", destination = "country.name"),
+         `value set` = case_when(value_set == "EUVAS" ~ "VAS (European value set)",
+                                 value_set == "VAS" ~ "VAS (country-specific value set)",
+                                 value_set == "TTO" ~ "TTO (country-specific value set)")) %>%
+  select(`value set`, country, sex, `age category`= agecat, mean, `standard error` = se) %>%
+  arrange(country) %>%
+  reactable(groupBy = c("country", "value set", "sex"), striped = TRUE)
+
+
+```
+
+<em>Data from: @szendeSelfReportedPopulationHealth2014</em>
+
+For the consultation model, the following utility values from literature are used [@oppongCosteffectivenessInternetbasedTraining2018].
+
+```{r}
+consult_uti <- uti$base_utilities
+consult_uti$healthy$value <- consult_uti$healthy$sd <- "Population norms"
+consult_uti$healthy$reference <- "Szende 2014"
+
+as_tibble(transpose(consult_uti)) %>% 
+  mutate(state = names(consult_uti), 
+                                                    value = as.character(value),
+                                                    sd = as.character(sd),
+                                                    reference = as.character(reference)) %>%
+  select(state, utility = value, sd , reference) %>%
+  reactable(striped = TRUE)
+```
+
+After a hospitalization in the consultation model, a utility decrement of 0.1 is applied for individuals aged 65 and over [@mangenImpactCommunityacquiredPneumonia2017].
+
+### Probabilities consultation model
+
+Currently, many probabilities in the consultation model are derived from literature. [An overview is provided later in this document](#microsimulation)
+
+### Costs consults {#costs_consults}
+
+The following consult costs are used in the model (presented in `r currency_year` euros). The outpatient care costs are per consult or prescription and inpatient care per day.
+
+```{r, warning = FALSE}
+consult_cost_data %>% 
+  rowwise() %>%
+  mutate(cost = euro(convert_price(cost, country, curyear, currency_year, c("local", "EUR"), c("local", "EUR"))),
+        country = countrycode(country, origin = "iso2c", destination = "country.name")) %>%
+  select(country, item, cost, reference = ref) %>%
+  arrange(country) %>%
+  reactable(groupBy = "country", striped = TRUE)
+```
+
+# Model details
+
+## Automatically load model inputs
+
+The function create_data() will automatically load all required data and generate the individuals in the model (this process is further [here](#demographic_model)). Before running this function all required data should be available in the 'data_input' folder.
+
+The function requires the following inputs:
+
+-   Population size (e.g. 1000, or 1000000)
+-   Country code (e.g. "nl" or "de", this can be either a single string or an array)
+-   The strategies that are being compared (eg. "base", "crp",this can be either a single string or an array)
+-   Start year
+-   Number of years the simulation should run
+-   An array containing the weeks that include the influenza season
+-   The currency year
+-   The method to include productivity (either "friction", "hc" (human capital) or "none")
+-   Used value set for the utilities (either EUVAS, VAS or TTO)
+-   Should the mortality be corrected (TRUE/FALSE)
+-   Should the model use stochastic methods (TRUE/FALSE)
+-   ID of model iteration (in case a single integer is provided, or an array containing the iterations that need to be run, e.g. 1:100 for 100 iterations)
+
+This function automatically converts costs to the same [currency year](#currency_methods).
+
+Below is a raw output of the contents of a data object for the model.
+
+```{r}
+data <- create_data(n_nodes = 10000,
+                    country_list = country,
+                    strategy_list = c("base", "crp"),
+                    start_year = 2020,
+                    n_years = 1,
+                    included_weeks = 1:52,
+                    currency_year = 2019,
+                    productivity_method = "friction",
+                    use_corrected_mortality = TRUE,
+                    probabilistic = FALSE,
+                    iterations = 1)
+
+glimpse(data)
+
+```
+
+## Demographic model {#demographic_model}
+
+Within the model, nodes are created to represent individuals. Populations are mainly based on demographic data from [Eurostat](https://ec.europa.eu/eurostat/home) and can be made as large as needed. The nodes are stored in a tibble, where every line represents one individual. Below is an example of 10 nodes:
+
+```{r}
+node_create(n = 10,
+            sex = rbinom(10, 0:1, c(.5,.5)), 
+            age = c(0,10,20,30,40,50,60,70,80,90)) %>%
+  reactable(striped = TRUE)
+```
+
+Where the id is an unique identifier of each node; active indicated whether an individual is alive, sex is 0 for male and 1 for female, age is age (0-99), empl indicates the employment status for each node (note that we did not set that in this case, so it defaulted to "employed"), uti_base for the base utility value (explained below) and uti_dec for any utility decrement (0 by default). The methods used to create a representative sample of the population based on the demographics of a country, are described below.
+
+### Baseline population
+
+Before running the model, the starting population needs to be created: age distribution: the age_dist() function samples ages based on the Eurostat population projections from the starting year. Example for 50 age values:
+
+```{r}
+#load Eurostat population projection
+pop_project <- readRDS("data_input/generated/pop_proj.RDS") %>%
+  filter(geo == country)
+
+pop_project_start <- pop_project %>%
+  filter(time == 2020)
+
+age_distribution <- pop_project_start %>% 
+                                mutate(age = str_sub(age, start = 2, end = 4),
+                                       age = ifelse(age == "_LT", 0, age)) %>%
+                                filter(sex == "T",
+                                       age != "_GE",
+                                       age != "OTA") %>%
+                                select(age, values) %>%
+                                mutate(age = as.double(age),
+                                       ageprop = values / sum(values)) %>%
+                                arrange(age)
+
+age <- agedist(age_distribution, 50)
+print(age)
+```
+
+The probability of being female is sampled using the sexdist() function, using the probability of being female from the Eurostat population projections (at each age). Example:
+
+```{r}
+female_prob <- pop_project_start %>% 
+                 mutate(age = str_sub(age, start = 2, end = 4),
+                        age = ifelse(age == "_LT", 0, age)) %>%
+                 filter(sex == "T" | sex == "F",
+                        age != "_GE",
+                        age != "OTA") %>%
+                 select(sex, age, values) %>%
+                 mutate(age = as.double(age)) %>%
+                 arrange(sex) %>%
+                 group_by(age) %>%
+                 summarise(prop = first(values) / last(values),
+                           .groups = "drop")
+
+sex <- sexdist(female_prob, age)
+print(sex)
+```
+
+The employment status is created using the calc_employment() function. This function uses the most recent data on unemployment, education and pensions from Eurostat and is dependent on the age.
+
+```{r warning=FALSE}
+employment_data <- readRDS("data_input/generated/employment.RDS") %>%
+  filter(geo == country)
+employment <- calc_employment(age, employment_data, "array")
+print(employment)
+```
+
+The utility values are set using the run_base_utility() function, which sets the base utility values (uti_base) to those described [above](#data_base_utilities). If required a utility decrement is applied to any node, and this is registered in the uri_dec column.
+
+Combining this all leads to the following 50 nodes:
+
+```{r warning=FALSE, paged.print=TRUE}
+node_create(n = 50,
+            sex = sex, 
+            age = age,
+            empl = employment) %>%
+  run_base_utility(data$utility_data[[1]]) %>%
+  reactable(striped = TRUE)
+```
+
+Doing this for more (e.g. 10000) nodes can be used to create a population pyramid:
+
+```{r echo=FALSE}
+age_data <- pop_project_start %>%
+   mutate(age = str_sub(age, start = 2, end = 4),
+                                       age = ifelse(age == "_LT", 0, age)) %>%
+   filter(sex == "T",
+         age != "_GE",
+         age != "OTA") %>%
+   select(age, values) %>%
+   mutate(age = as.double(age),
+         ageprop = values / sum(values)) %>%
+   arrange(age)
+
+ages <- agedist(age_data, 10000)
+
+nodes <- node_create(n = 10000,
+            sex = sexdist(female_prob, ages), 
+            age = ages,
+            empl = calc_employment(ages, employment_data, "array"))
+
+pyramid <- tibble(year = double(),
+                popGroup = character(),
+                sex = character(),
+                n = double())
+
+create_pyramid(pyramid, nodes, 2020) %>%
+  mutate(popGroup = as.factor(popGroup)) %>%
+  ggplot(aes(x = popGroup, y = n, fill = sex)) +
+  geom_bar(stat = "identity" , width = .6) +
+  coord_flip() +
+  scale_y_continuous(labels = abs) +
+  scale_fill_manual(values = valuePalette) +
+  labs(x = "Age category", y = "Individuals") +
+  theme_minimal()
+
+```
+
+#### Vaccination
+
+```{r, echo = FALSE}
+vaccination_data <- readRDS(paste0("data_input/generated/vaccination_status.RDS")) %>%
+  filter(geo == country)
+```
+
+Influenza vaccination data for persons aged \>= 65 from Eurostat are used. Before running the model, the population coverage is sampled. This is repeated every year (to simulate elderly getting vaccinated anually). The function run_influenza_vaccination is used for this. Below is an example to vaccinate the elderly in the Netherlands (vaccination rate: `r percent(vaccination_data %>% pull(value))`), using the population that was just created for the population pyramid.
+
+```{r}
+nodes %>%
+  filter(age >= 65) %>%
+  run_influenza_vaccine(vaccination_data) %>%
+  reactable(striped = TRUE)
+```
+
+### Annual demographic changes
+
+Every year the population is updated to reflect the Eurostat projections; this is done in the following order:
+
+-   Mortality
+
+-   Ageing
+
+-   Fertility
+
+-   Migration
+
+-   Employment status
+
+-   Vaccination coverage
+
+    -   Influenza vaccinations for the elderly (\>= 65 years old)
+
+-   Utilities
+
+#### Mortality {#population_mortality}
+
+```{r, include = FALSE, echo = FALSE}
+mortality_data <- readRDS("data_input/generated/mortality_data.RDS") %>%
+  filter(geo == country)
+base_mort <- run_base_mortality(nodes, mortality_data, 2021)
+```
+
+Two types of mortality are included: base mortality and excess mortality. The base mortality is based on the Eurostat mortality probability projections, corrected to exclude mortality for influenza and pneumonia. In the run_base_mortality() function, the mortality probability is sampled for the active nodes of all age groups. This returns a list of node IDs that are going to be deactivated. A major assumption in the model is that all nodes over 99 will be deactivated. We do not include centennials in the model. This is mainly due to data availability for this group. Below is an example of running the base_mort() function within a population of `r nrow(nodes)` nodes, it returns the IDs of the `r length(run_base_mortality(nodes, data$mortality[[1]], 2021))` nodes that will be deactivated, using the mortality projections from 2021:
+
+```{r}
+
+base_mort
+```
+
+65+ year olds have an increased risk of dying after being hospitalized for community-acquired pneumonia [@mangenImpactCommunityacquiredPneumonia2017] and this is calculated as excess mortality using the run_excess_mortality() function. This function also returns a list of node IDs.
+
+After the nodes are collected that should be deactivated, this is executed using the node_remove() function, which will inactivate the nodes (i.e. set active to 0):
+
+```{r paged.print=TRUE}
+node_remove(nodes, base_mort) %>%
+  arrange(active) %>%
+  reactable(striped = TRUE)
+```
+
+#### Ageing
+
+Ageing is straightforward in that it increases the age with 1. The function used in increase_age().
+
+```{r}
+nodes <- increase_age(nodes)
+```
+
+#### Fertility
+
+Annual births are added using the births() function. Input data is used from the Eurostat population projections. The number of babies born is related to the population aged 15-45. The births() function takes the node_list as an input and returns the node_list with newly-created nodes (babies). See an example here:
+
+```{r}
+fertility_data <- pop_project %>%
+  mutate(age = str_sub(age, start = 2, end = 4),
+                                        age = ifelse(age == "_LT", 0, age)) %>%
+                                 filter(sex == "T",
+                                        age != "_GE",
+                                        age != "OTA") %>%
+                                 mutate(age = as.double(age)) %>%
+                                 select(time, age, values) %>%
+                                 arrange(age) %>%
+                                 pivot_wider(names_from = "age", values_from = "values") %>%
+                                 rowwise() %>%
+                                 mutate(parent_pop = sum(c_across(17:47)),
+                                        fertility = `0` / parent_pop) %>%
+                                 select(time, fertility) %>%
+                                 ungroup()
+
+  
+  
+births(nodes, fertility_data, 2021)  %>% 
+  arrange(age) %>%
+  reactable(striped = TRUE)
+  
+```
+
+#### Migration
+
+The model accounts for migration by using the Eurostat projections. The Eurostat projections provide total numbers of immigration (positive number) and emigration (negative number) for 2019-2100. In MERIAM this is related to the total population and converted to a rate. This rate is then used to calculate the total number of immigrants and emigrants using the run_migration() function.
+
+```{r}
+migration_data <- left_join(readRDS("data_input/generated/migration_data.RDS") %>% filter(geo == country),
+                            pop_project %>% 
+                              filter(sex == "T", age == "TOTAL") %>% 
+                              select(time, total_pop = values),
+                            by = "time") %>%
+  mutate(rate = values / total_pop) %>%
+  select(-geo, -values, -total_pop)
+
+run_migration(nodes, migration_data, 2021) %>%
+  arrange(desc(id)) %>%
+  reactable(striped = TRUE)
+```
+
+#### Employment status
+
+The employment status is used to calculate productivity losses. As this model assumes no effect of disease status on the employment of individuals, this is randomly assigned every year using the calc_employment() function. This function distinguishes five states of employment:"none", "school", "employed", "unemployed", "retired". Where "none" is used for children too young to follow education. All children are assumed to go to school at age 5. At age 5-14 all children go to school. Between the ages of 15 and 24 school-going individuals gradually move to being either employed or unemployed, based on the Eurostat education and productivity data. Between the ages of 25-54 all individuals are either employed or unemployed. From the age of 55 individuals gradually retire (based on the Eurostat retirement data). From the age of 75, everyone is assumed to be retired.
+
+```{r}
+kable(table(nodes$empl))
+```
+
+#### Vaccination coverage
+
+The function run_influenza_vaccination is run every year, randomly selecting individuals aged 65 or over to be vaccinated with an influenza vaccine.
+
+#### Base utility
+
+The utility values are set every year using the run_base_utility() function, which sets the base utility values (uti_base) to those described [above](#data_base_utilities).
+
+## Consultation model {#consulation_model}
+
+Each week, a subset of nodes will seek care. These nodes are selected based on real-world incidence data.
+
+### Incidence
+
+Incidence is modeled using the Incidence package. Data is from [WHO/ECDC to be determined] Both Acute Respiratory Infection (ARI) and Influenza-Like Illness (ILI) are modeled (if data is available). Incidence data is stratified by the following age groups:
+
+-   0-4 years
+
+-   5-14 years
+
+-   15-64 years
+
+-   65 years and over
+
+Incidence data is read into R and then converted into an incidence object from the Incidence package. Two exponential models will be created for each year, one where the number of cases increases over time and one where the number cases decrease. This way, an annual peak is created in the influenza season. The function fit_optim_split() from the incidence package is used to automatically determine the peak of the influenza season.
+
+At the start of each model run, the exact incidence is calculated using the model for all weeks. See an example below for 4 weeks in a model run with 10,000 nodes for the Netherlands.
+
+```{r example-incidence}
+
+    incidence <- expand_grid(geo = "nl",
+                  season = 1,
+                  type = c("ari", "ili")) %>%
+        mutate(season = str_c(2019,"-",2020),
+               import = map2(geo, type,
+                             ~readRDS("data_input/ecdc/incidence_models.RDS") %>%
+                               mutate(season = as.character(season)) %>%
+                               filter(geo == .x, type == .y)),
+               n_seasons = map_dbl(import,
+                                   ~length(levels(as.factor(.x$season))))) %>%
+        filter(n_seasons > 0) %>%
+        mutate(q = sample((1:9999)/10000, nrow(.))) %>%
+        rowwise() %>%
+        mutate(rand_season = sample(1:n_seasons, 1)) %>%
+        ungroup() %>%
+        mutate(inc_data = pmap(list(import, q, rand_season),
+                               function(x, q, rand_season){
+                                 select_season <- levels(as.factor(x$season))[rand_season]
+                                 
+                                 x <- x %>%
+                                   filter(season == select_season) %>%
+                                   rowwise() %>%
+                                   mutate(incidence = qlnorm(q, meanlog = logmean, sdlog = logsd)) %>%
+                                   ungroup() %>%
+                                   select(age_group, week = weeknr, incidence)
+                                 
+                                 expand_grid(agecat = levels(as.factor(x$age_group)),
+                                             week = c(31:52, 1:30)) %>%
+                                   left_join(x, by = c("agecat" = "age_group", "week")) %>%
+                                   mutate(incidence = coalesce(incidence, 0))
+                               })) %>%
+        select(geo, season, type, inc_data) %>%
+        unnest(inc_data) %>%
+        mutate(year = case_when(
+          week >= 31 ~ as.double(str_sub(season, 1, 4)),
+          week < 31 ~ as.double(str_sub(season, 6, 9))
+        ),
+        epi_week = str_c(year, "-", formatC(week, width = 2, flag = "0")),
+        geo = if_else(geo == "gb-eng", "gb", geo)) %>%
+        select(geo, type, year, week, epi_week, agecat, incidence) %>%
+      filter(str_detect(epi_week,"2020")) %>%
+      group_by(geo, epi_week, type) %>%
+      summarise(incidence = sum(incidence), .groups = "drop") %>%
+      mutate(incidence = round(incidence / 10)) %>%
+      pivot_wider(names_from = "type", values_from = "incidence") %>%
+       pivot_wider(names_from = "geo", values_from = c("ili", "ari"))
+    
+    col_names <- incidence %>%
+      select(starts_with("ili"), starts_with("ari")) %>%
+      colnames() %>%
+      as_tibble() %>%
+      mutate(countryname = countrycode(str_sub(value, 5, 6), origin = "iso2c", destination = "country.name"))
+    
+     incidence %>%
+       rename(Week = epi_week,
+              `ILI` = ili_nl,
+              `ARI` = ari_nl) %>%
+       slice(1:4) %>%
+       kbl(caption = "Example of incidence in model (per 10,000 inhabitants), for Influenza-like ilness (ILI) and Acute respiratory-tract infection (ARI), per week")
+```
+
+
+The incidence is used as input for the consult_gp() function. This function samples nodes that visit a doctor from the node list (both ari or ili). It returns a node list with only the nodes seeking care and simulates the initial consult, including tests, treatment and associated costs (see below).
+
+Below is an example for 4 weeks (weeks 40-43, right at the start of the flu season). Note that ili incidence is also added. Costs are €0, as these will be filled in later.
+
+```{r}
+data %<>% consult_gp(1:4, 2020)
+
+
+#select only base strategy population to keep things simple
+data$careseek[[1]] %>% 
+  select(careseek_type, id, sex, age) %>%
+  reactable(striped = TRUE)
+```
+
+### Index consultation
+
+During the index consultation, a clinician will perform tests, prescribe antibiotics etc. This is modeled for all nodes seeking care. Additionally, costs will be recorded. For all nodes seeking care (as described above), tests and antibiotic prescriptions are sampled.
+
+As far as the tests are not part of the intervention, they are sampled using the PPAS data.
+
+Antibiotics are also sampled using the PPAS data, including the probability of delayed prescription. Both the proportion of antibiotic prescriptions and the delayed prescriptions are country-specific; the proportion of antibiotic prescriptions is stratified by age (two categories: younger than 60 and 60 and older). In case of a delayed prescription, patients will not start taking antibiotics if they are cured within two days.
+
+```{r}
+
+data %<>% consult_gp(1:4, 2020)
+
+data$careseek[[1]] %>% 
+  mutate(across(.cols = c("costs", "test_cost", "abx_cost"),
+                ~euro(.x))) %>%
+  reactable(striped = TRUE)
+  
+  
+```
+
+### Entry into the healthcare system
+
+For now, the entry point into the health system is the General Practitioner - emergency rooms and long-term care facilities will follow later.
+
+### 28-day follow up {#microsimulation}
+
+After the initial consultation, the patients are modelled for 28 days using a microsimulation. This is a microsimulation based on earlier work by Krijkamp et al., including the very useful samplev() function to sample vectorized data [@krijkampMicrosimulationModelingHealth2018].
+
+The probabilities are imported in to the model using a yaml file, which is implemented in such a way that all strategies can have their own probabilities.
+
+The transition probabilities from 'death' and 'healthy' are not shown here, as we assume that all patients remain either death or cured for the remaining days in the microsimulation.
+
+```{r}
+probs <- tibble(probability = names(data$probabilities[[1]]),
+                values = data$probabilities[[1]])
+
+probs %>% 
+  unnest_wider(values) %>%
+  mutate(p = as.character(value),
+         p = case_when(str_detect(p, "function")~dependency,
+                          str_detect(p, "function", negate = TRUE)~p),
+         from = str_sub(probability, 3, 3),
+         to = str_sub(probability, 4, 4),
+         across(.cols = c("from", "to"), 
+                ~case_when(str_detect(.x, "s")~"sick",
+                           str_detect(.x, "h")~"hospital",
+                           str_detect(.x, "d")~"death",
+                           str_detect(.x, "i")~"ICU",
+                           str_detect(.x, "c")~"healthy"))) %>%
+  select(from, to, p, distribution = dist, reference) %>%
+  filter(from != "ICU", to != "ICU") %>%
+  reactable(striped = TRUE)
+```
+
+#### Illness duration
+
+Illness duration is taken from [@vosLowerRespiratoryTract2020], which is for lower respiratory infections. The probability of being cured changes by day, based on a median illness duration of 6 days and a standard error of `r round(exp((log(10) - log(4))/1.349),2)` days. Using [@briggsDecisionModellingHealth2006, pp 52-53] to convert this to daily probabilities:
+
+```{r}
+p_sc_probs <- tibble(cycle = 1:27,
+                    probability = data$probabilities[[1]]$p_sc$value(27)) 
+
+ggplot(p_sc_probs, mapping = aes(x = cycle, y = probability)) +
+  geom_line(size = 1.2, color = "#207BA3")
+  
+```
+
+#### Hospital length-of-stay
+
+Hospital length-of-stay data is published by Eurostat, specific for country, sex, age and indication. For now, we made the assumption that all patients with an acute respiratory infection will be hospitalized for pneumonia and all patients with influenza-like illness for an upper respiratory tract infection (urti) / influenza. We assume a linear function for the length-of-stay. Another assumption is that patients are healthy when they are discharged. This translates to the following daily probabilities from hospitalized to healthy:
+
+```{r}
+age_pos <- c(1, 21, 41, 61, 81, 100)
+ 
+ tibble(age = c(0, 20, 40, 60, 80, 99),
+        `urti/inf (male)` = round(data$probabilities[[1]]$p_hc$data[age_pos,2],3),
+        `urti/inf (female)` = round(data$probabilities[[1]]$p_hc$data[age_pos+100,2],3),
+        `pneumonia (male)` = round(data$probabilities[[1]]$p_hc$data[age_pos,1],3),
+        `pneumonia (female)` = round(data$probabilities[[1]]$p_hc$data[age_pos+100,1],3)) %>%
+   reactable(striped = TRUE)
+```
+
+#### Running the microsim
+
+The microsim can be run using the microsim() function. This function handles running the microsim, as well as aggregating the results. It is able to run in parallel using the Future package.
+
+See here the results of a microsim with `r nrow(data$careseek[[1]])` nodes seeking care.
+
+```{r}
+#index consult:
+   
+
+runsim <- microsim(data = data[1,],
+                       current_year = 2020,
+                       week = 1,
+                   parallel_mode = "none")
+
+runsim$plot[[1]] + theme_minimal() + scale_color_manual(values = valuePalette)
+```
+
+This leads to the following aggregated results:
+
+```{r}
+runsim$aggregated[[1]] %>% 
+  select(
+    Incidence = incidence,
+    Costs = cost_healthcare,
+    Hospitalizations = hosp,
+    Deaths = deaths,
+    Lifeyears = lifeyear,
+    QALYs = qaly) %>%
+  mutate(across(.cols = c(1,3,4,5,6), .fns = ~as.character(round(.x))),
+         Costs = euro(Costs)) %>%
+  pivot_longer(cols = everything(), names_to = "Item", values_to = "Value") %>%
+  reactable()
+```
+
+```{r, include = FALSE, echo = FALSE}
+#make the incidence 4 times higher
+dat2 <- data
+dat2$incidence[[1]] %<>%
+  mutate(incidence = 4*incidence)
+
+#run careseek again:
+dat2 %<>% consult_gp(1:4, 2020)
+
+dat2$careseek[[1]] %>% 
+  mutate(across(.cols = c("costs", "test_cost", "abx_cost"),
+                ~euro(.x))) %>%
+  reactable(striped = TRUE)
+
+
+
+runsim2 <- microsim(data = dat2,
+                       current_year = 2020,
+                       week = 1)
+```
+
+With a low number of nodes, this process can be quite random. However, this should be solved if the number of random draws increases (i.e. the number of nodes is increased). Let's run a total of `r nrow(dat2$careseek[[1]])` nodes through the simulation:
+
+```{r}
+runsim2$plot[[1]] + theme_minimal() + scale_color_manual(values = valuePalette)
+rm(dat2, runsim2)
+```
+
+### Implementation of long-term effects
+
+The outcomes of the microsimulation are implemented in the population model in a variety of ways.
+
+-   Direct mortality: nodes that reach the "death" state are deactivated in the model, using the node_remove() function.
+-   Excess mortality: following a hospitalization for CAP, patients older than 65 have a relative risk of mortality of `r data$longterm[[1]]$excess_mortality$cap$relative_risk` (sd: `r data$longterm[[1]]$excess_mortality$cap$relative_risk_sd`) [@mangenImpactCommunityacquiredPneumonia2017]. This effect is categorized under excess mortality, and applied annually when overall mortality is applied (see [Mortality](#population_mortality)). We assume this effect lasts for only one year.
+-   Utilities: a utility decrement of `r data$longterm[[1]]$utility_decrement$cap$value`, is applied to hospitalized patients older than 65 [@mangenImpactCommunityacquiredPneumonia2017].
+
+### Productivity losses
+
+Productivity losses are typically incorporated using two methods: the friction cost method or the human capital method [@krolHowEstimateProductivity2014]. The friction period is assumed to be 12 weeks in all countries [@krolHowEstimateProductivity2014]. For the data sources see [above](#data_labour).
+
+During the 28-day follow-up, the employment/education status of individuals are considered to calculate the productivity losses as follows:
+
+```{r}
+tibble(`Employment status` = c("None", "School", "Employed", "Unemployed", "Retired"),
+       `Productivity losses` = c("Parents' costs of labour", "Parents' costs of labour", "Average costs of labour", "Unpaid work", "Unpaid work"),
+       `Calculation details` = c(rep("Added later", 2), "Daily labour costs for the number of days (cycles) patient is not 'healthy'", rep("Costs of unpaid work, for the number of hours patients indicated to being able to perform this (from clinical trial)", 2))) %>%
+reactable(striped = TRUE)
+```
+
+#### Productivity losses due to mortality
+
+For patients that die within the 28-day follow-up period, productivity losses are estimated beyond the 28 simulated days. For the friction cost method, the productivity losses for the complete friction period (12 weeks) are counted [@krolHowEstimateProductivity2014]. For the human capital method, we calculate production for the whole (alive) population in the demographic model and subtract from that the productivity losses calculated within the consultation models. A deceased patient will not be counted anymore, hence will not contribute to the total production.
+
+## AMR module
+
+```{r, echo = FALSE, display = FALSE}
+meriam_tsa <- readRDS("appendices/crp_nl/combined_data.RDS")
+
+countries <- "nl"
+```
+
+The AMR model uses a two-step approach. First, the baseline AMR projections are generated, using an ensemble model. This is a data-driven approach where current trends are used to forecast future AMR rates. These baseline projections are then used as for the current-care scenario, where we assume current patterns in AMR will continue in the future. The second step is to incorporate the impact on antibiotic consumption from the diagnostic strategies, in the baseline AMR projections. This uses a more mechanistically-driven approach. The steps are described in more details below.
+
+Within the VALUE-Dx project, we aim to assess the long-term effects of rapid diagnostics on antimicrobial resistance (AMR). The first step in this process is to forecast AMR rates when the status quo is preserved, i.e. current AMR policies remain, but no additional measures are taken. Predicting antimicrobial resistance (AMR) is a challenging task, as the development and subsequent spread of resistance genes is highly uncertain. Two methods of modelling AMR in the population over time have been identified [@rotheryFrameworkValueAssessment2018]:
+
+-   Mechanistic dynamic transmission models, which models the transmission of resistant pathogens through populations, requiring information on the mechanisms of spread of resistant pathogens.
+
+-   Statistical forecasting methods, which is a data-driven approach where the underlying mechanisms of resistance is not considered: past trends are used to forecast future AMR rates.
+
+Additionally, expert elicitation is a viable method to forecast AMR, which can be combined with these modeling approaches [@colsonQuantifyingUncertaintyFuture2019] .The mechanisms to attain and retain resistance may differ between various pathogens. As we aim to assess the impact of diagnostics for all community-acquired respiratory-tract infections in the population, which can be caused by various pathogens [@ievenAetiologyLowerRespiratory2018] , we considered a mechanistic dynamic transmission model not to be a viable strategy. A statistical forecasting method, comparable to the methods used by Hashiguchi et al. was used for this study [@hashiguchiResistanceProportionsEight2019] .
+
+Several methods are available for time series forecasting [@hyndmanForecastingPrinciplesPractice2021; @galiciaMultistepForecastingBig2019], but selecting a single 'best' model is challenging. Ensemble methods are an often-used technique to improve forecasts: instead of picking one model, several models are used simultaneously and then combined to provide an average. We developed an ensemble model, averaging three models:
+
+-   An exponential smoothing (ETS) model, which forecasts future data using weighted averages of past observations. [@hyndmanForecastingPrinciplesPractice2021]
+
+-   A random forest, which aggregates many regression trees to estimate the outcome of interest (AMR rates in our case) [@breimanRandomForests2001]. Bagging (bootstrapping and aggregrating) is used, where each decision tree is informed by a random sample, with only a subset of the available regressors, of the original data set. The different trees are grown in parallel, i.e. new trees are not informed by previous trees.
+
+-   An XGBoost model, which also combines many regression trees to estimate the outcome of interest, however, as opposed to random forests, a sequential tree growing algorithm (boosting) is used, where each new tree informs the creation of the next tree [@chenXGBoostScalableTree2016].
+
+### Missing data
+
+The European consumption and AMR data had some missing data. These were imputed using the Amelia algorithm [@honakerAmeliaIIProgram2011] which allows for time-series-cross-sectional data to be imputed. To incorporate uncertainty in the various forecasts, the imputation algorithm was run 2000 times to incorporate uncertainty.
+
+### Forecasts of antibiotic consumption
+
+Antibiotic consumption of broad-spectrum penicillins was forecast using an ETS model.
+
+There are different ETS methods. As we considered annual data, we did not consider seasonal components. The trend can be either none, additive, additive damped or multiplicative. Multiplicative trends tend to produce poor forecasts and additive trends can overestimate the trend on the long term [@hyndmanForecastingPrinciplesPractice2021], hence we considered an additive damped trend. The consumption data were box-cox transformed so that the data resembled a normal distribution. An example is displayed in figure \@ref(fig:abx-consum-ets).
+
+```{r abx-consum-ets, warning = FALSE, echo = FALSE, message = FALSE, fig.cap="Antibiotic consumption forecast"}
+abx_consumption <- meriam_tsa$regressors %>%
+            ungroup() %>%
+            select(geo, code, time, 
+                   .model_desc = set, 
+                   .index = time, 
+                   .value = consumption_median,
+                   .conf_lo = consumption_low,
+                   .conf_hi = consumption_high) %>%
+            mutate(.model_id = 1,
+                   .key = case_when(.model_desc == "historical" ~ "actual",
+                                    is.character(.model_desc) ~ "prediction"),
+                   .model_desc = case_when(.model_desc == "historical" ~ "ACTUAL",
+                                           is.character(.model_desc) ~ "ETS"))
+abx_consumption %>%
+            filter(geo %in% str_to_upper(countries),
+                   code == "BSP") %>%
+            rename(Legend = .model_desc) %>%
+            ggplot() +
+            geom_ribbon(aes(x = .index, ymin = .conf_lo, ymax = .conf_hi, fill = Legend), alpha = .2) +
+            geom_line(aes(x = .index, y = .value, color = Legend)) +
+            scale_color_manual(values = valuePalette) +
+            scale_fill_manual(values = valuePalette) +
+            #facet_wrap(~geo) +
+            xlab("Year") +
+            ylab("DDD / 1000 population") +
+            theme_minimal()
+```
+
+### AMR forecasts
+
+For the antimicrobial resistance forecasts the dataset was split into a training and a testing set (training: 2005-2014, testing: 2015-2018), to be able to measure the performance of the forecasts. After fitting the different models to the training set, the prediction of the testing set was assessed. Then the models were refit to the full dataset to forecast the AMR rates up to 2050.
+
+Although we only assessed resistance of *Streptococcus pneumoniae* to broad-spectrum penicillins in the Netherlands in this paper, we incorporated data from other bug-drug combinations and European countries as regressors in the random forest and XGBoost models.
+
+#### Exponential smoothing model
+
+The exponential smoothing model uses a similar approach as described for the consumption forecasts, hence an additive, damped, trend.
+
+#### Random forest model
+
+The random forest model uses the following regressors to predict the AMR rate:
+
+-   Antibiotic consumption
+
+-   GDP forecasts (corrected for purchasing power parities)
+
+-   Forecasts proportion population aged \< 15 years
+
+-   Forecasts proportion population aged \> 64 years
+
+-   Forecasts healthcare expenditure (% of GDP)
+
+-   Forecasts out-of-pocket spending on health (% of total spending on health)
+
+The ranger R package was used to build the model [@wrightRangerFastImplementation2017]. The model was tuned to minimize the root mean square error (RMSE), which resulted in a mtry (number of variables included in each bootstrapped sample of 25 and a min.node.size (minimum number of observations in terminal nodes) of 3 [@probstHyperparametersTuningStrategies2019].
+
+#### XGBoost model
+
+The XGBoost [@chenXGBoostScalableTree2016] model uses the same dependent variables as the random forest model. After tuning the following hyperparameters were chosen:
+
+-   min_child_weight: 3 (minimum number of instances in child node)
+
+-   max_depth: 11 (maximum depth of each tree)
+
+-   eta 0.00920 (learning rate)
+
+-   gamma: 0.00158 (mimumum loss reduction to make a further partition on a lead node of the tree)
+
+Below are the feature importance plot, an example of a tree used in the XGBoost model and an example of a forecast:
+
+#### Accuracy of predictions
+
+The accuracy of the different models is calculated on the testing set, using the models trained only on the training set. Figure \@ref(fig:amr-pred-cal) shows an example of the calibration of one model iteration.
+
+```{r amr-pred-cal, fig.cap="AMR forecast calibration"}
+meriam_tsa$calibration %>%
+            filter(geo %in% str_to_upper(countries), 
+                   pair == "PRSP") %>%
+            mutate(.value = .value,
+                   .conf_lo = .conf_lo,
+                   .conf_hi = .conf_hi,
+                   .index = as_date(.index))  %>%
+            ungroup() %>%
+            ggplot() +
+            geom_ribbon(aes(x = .index, ymin = .conf_lo, ymax = .conf_hi, fill = .model_desc), alpha = .2) +
+            geom_line(aes(x = .index, y = .value, color = .model_desc)) +
+            scale_color_manual(values = valuePalette) +
+            scale_fill_manual(values = valuePalette) +
+            #facet_wrap(~geo) +
+            scale_y_continuous("Resistance", labels = label_percent()) +
+            scale_x_date(
+            "Year",
+            breaks = scales::breaks_width("2 years"), 
+            labels = scales::label_date("'%y")
+              ) + 
+            theme(legend.position = "bottom")
+```
+
+The performance of time-series forecasts are often represented using the root mean squared error (RMSE), which is calculated using the following formula [@hyndmanForecastingPrinciplesPractice2021]:
+
+$$
+RMSE = \sqrt{mean(e^2_t)}
+$$
+
+Where $e_t$ is the forecast error of values from the testing set.
+
+The values differ within the probabilistic analysis, table \@ref(tab:amr-accuracy-overview) gives an overview:
+
+```{r amr-accuracy-overview}
+meriam_tsa$accuracy %>%
+  filter(geo %in% str_to_upper(countries),
+         pair == "PRSP") %>%
+  unnest(data) %>%
+  ungroup() %>%
+  mutate(accuracy = str_c(round(median, 2), " [", round(low, 2)," - ", round(high, 2), "]")) %>%
+  select(.model_desc, param, accuracy) %>%
+  pivot_wider(names_from = param, values_from = accuracy) %>%
+  #group_by(geo) %>%
+  kbl(booktabs = T, caption = "Overview accuracy metrics AMR predictions") %>%
+  kable_styling(latex_options = c("hold_position", "scale_down")) %>%
+  footnote(general = "mae: mean absolute error; mape: mean absolute percentage error; mase: mean absolute scaled error; root mean square error; rsq: r-squared; smape: symmetric mean absolute percentage error")
+```
+
+#### Forecasts of individual models
+
+Figure \@ref(fig:amr-forecasts) gives the AMR forecasts of the individual models.
+
+```{r amr-forecasts, fig.cap="Antimicrobial resistance forecasts", fig.height = 10, fig.width=8}
+amr_forecasts <- meriam_tsa$amr
+actual_data <- amr_forecasts %>%
+  filter(.model_desc == "ACTUAL",
+         geo %in% str_to_upper(countries),
+         pair == "PRSP")
+  
+ets_plot <- amr_forecasts %>%
+  filter(geo %in% str_to_upper(countries), 
+         pair == "PRSP", (.model_id == 3 | is.na(.model_id)),
+         .index < "2031-01-01") %>%
+  bind_rows(actual_data) %>%
+  ggplot() +
+            geom_ribbon(aes(x = .index, ymin = .conf_lo, ymax = .conf_hi, fill = .model_desc), alpha = .2) +
+            geom_line(aes(x = .index, y = .value, color = .model_desc)) +
+            scale_color_manual(values = valuePalette) +
+            scale_fill_manual(values = valuePalette) +
+            facet_wrap(~geo) +
+            scale_y_continuous("Resistance", labels = label_percent()) +
+            scale_x_date(
+            "Year",
+            breaks = scales::breaks_width("5 years"), 
+            labels = scales::label_date("'%y")
+              ) + 
+            theme(legend.position = "bottom") +
+            ggtitle("Exponential smoothing")
+rf_plot <- amr_forecasts %>%
+  filter(geo %in% str_to_upper(countries), 
+         pair == "PRSP", (.model_id == 1 | is.na(.model_id)),
+         .index < "2031-01-01") %>%
+  ggplot() +
+            geom_ribbon(aes(x = .index, ymin = .conf_lo, ymax = .conf_hi, fill = .model_desc), alpha = .2) +
+            geom_line(aes(x = .index, y = .value, color = .model_desc)) +
+            scale_color_manual(values = valuePalette) +
+            scale_fill_manual(values = valuePalette) +
+            facet_wrap(~geo) +
+            scale_y_continuous("Resistance", labels = label_percent()) +
+            scale_x_date(
+            "Year",
+            breaks = scales::breaks_width("5 years"), 
+            labels = scales::label_date("'%y")
+              ) + 
+            theme(legend.position = "bottom") +
+            ggtitle("Random forest")
+xgb_plot <- amr_forecasts %>%
+  filter(geo %in% str_to_upper(countries), 
+         pair == "PRSP", (.model_id == 2 | is.na(.model_id)),
+         .index < "2031-01-01") %>%
+  bind_rows(actual_data) %>%
+  ggplot() +
+            geom_ribbon(aes(x = .index, ymin = .conf_lo, ymax = .conf_hi, fill = .model_desc), alpha = .2) +
+            geom_line(aes(x = .index, y = .value, color = .model_desc)) +
+            scale_color_manual(values = valuePalette) +
+            scale_fill_manual(values = valuePalette) +
+            facet_wrap(~geo) +
+            scale_y_continuous("Resistance", labels = label_percent()) +
+            scale_x_date(
+            "Year",
+            breaks = scales::breaks_width("5 years"), 
+            labels = scales::label_date("'%y")
+              ) + 
+            theme(legend.position = "bottom") +
+            ggtitle("XGBoost")
+ets_plot / rf_plot / xgb_plot
+```
+
+#### Ensemble
+
+The ensemble model is created by averaging (with equal weights) the predicted values across the models. An example is provided in figure \@ref(fig:amr-ens).
+
+```{r amr-ens, fig.cap="Ensemble model forecasts"}
+amr_forecasts %>%
+  filter(geo %in% str_to_upper(countries), 
+         pair == "PRSP", (.model_id == 4 | is.na(.model_id)),
+         .index < "2031-01-01") %>%
+  bind_rows(actual_data) %>%
+  ggplot() +
+            geom_ribbon(aes(x = .index, ymin = .conf_lo, ymax = .conf_hi, fill = .model_desc), alpha = .2) +
+            geom_line(aes(x = .index, y = .value, color = .model_desc)) +
+            scale_color_manual(values = valuePalette) +
+            scale_fill_manual(values = valuePalette) +
+            facet_wrap(~geo) +
+            scale_y_continuous("Resistance", labels = label_percent()) +
+            scale_x_date(
+            "Year",
+            breaks = scales::breaks_width("5 years"), 
+            labels = scales::label_date("'%y")
+              ) +
+            theme(legend.position = "bottom")
+  
+```
+
+#### Incorporating uncertainty
+
+The previously described forecasting methods generate point forecasts, that is, a mean is forecast, but no statistical distribution. To incorporate uncertainty in the AMR forecasting model, the following input parameters are varied and the models are fitted for 2000 iterations:
+
+-   A different imputed data set is used for both the historical AMR data and antibiotic consumption
+
+-   Forecasts healthcare expenditure (% of GDP) are varied for the model replications
+
+-   Forecasts out-of-pocket spending on health (% of total spending on health) are varied for the model replications
+
+Consequently, all model replications use slightly different AMR projections. However, we have not quantified all uncertainty associated with the projections, i.e. not all possible future AMR rates are included in the modeling.
+
+### Incremental effects of diagnostic strategies
+
+As has been described elsewhere, there is a clear relationship between antibiotic consumption and national AMR rates[@goossensOutpatientAntibioticUse2005; @cecchiniLowvalueHealthCare2017]. We use this relationship to relate the change in antibiotic consumption, as estimated in MERIAM, to future AMR levels (projected as described above). The following formula is used:
+
+$$
+p_{Test,t}^{Ab,B} = p_{Base,t}^{Ab,B} \times \frac{C_{Test,t-1}^{Ab}}{C_{Base,t-1}^{Ab}} \times \epsilon^{Ab,B}
+$$
+
+Where $p_{Test,t}^{Ab,B}$ is the proportion of resistance of bacterium $B$ to antibiotic $Ab$ under the testing scenario in the year $t$; $p_{Base,t}^{Ab,B}$ the proportion of resistance of bacterium $B$ to antibiotic $Ab$ under the base case scenario in the year $t$; $C_{Test,t-1}^{Ab}$ the antibiotic consumption of antibiotic $Ab$ in the year $t-1$ in the testing scenario; $C_{Base,t-1}^{Ab}$ the antibiotic consumption of antibiotic $Ab$ in the year $t-1$ in the base case scenario and $\epsilon$ the elasticity between antibiotic consumption of antibiotic $Ab$ and the development of resistance in bacterium $B$.
+
+#### Estimating elasticity
+
+The elasticity $\epsilon$ is given by the following formula:
+
+$$
+\epsilon = \frac{\% \; change \; in \; resistance }{\% \; change \; in \; consumption} 
+$$
+
+We calculate the elasticity from the historical antibiotic consumption and resistance data from the ECDC across all countries included in the dataset [@europeancentrefordiseasepreventionandcontrolAntimicrobialResistance2021]. Using ordinary least squares regression on the historical (non-missing) data, a linear function is estimated. See below for the example of the proportion of resistant pneumococci and the consumption of broad-spectrum penicillins:
+
+![Historical consumption of broad spectrum penicillins and resistance of pneumococci](fig/elasticity.png "Historical consumption of broad spectrum penicillins and resistance of pneumococci")
+
+```{r, include = FALSE}
+model_elas <- data$amr_elas[[1]]
+```
+
+This function is then used to estimate the elasticity using the midpoint method, which uses the average percent change of both resistance proportions ($p$) and antibiotic consumption ($C$) between two points on the linear function:
+
+$$
+\epsilon = \frac{\frac{p_2 - p_1}{(p_2 + p_1) / 2} \times 100}{\frac{C_2 - C_1}{(C_2 + C_1) / 2} \times 100} 
+$$
+
+The elasticity is not constant, it varies based on the location on the line. To give two examples, a drop from 3 ddd to 2 ddd (daily per 1000 population), a 33% drop, corresponds to an elasticity of `r round(calc_elasticity(model_elas, 2, 3),2)`, resulting in a decline of AMR levels by `r round(calc_elasticity(model_elas, 2, 3)*33)`%. However, a drop from 9 ddd to 6 ddd (also a 33% drop), corresponds to an elasticity of `r round(calc_elasticity(model_elas, 9, 6),2)`, causing an AMR rate decline of `r round(calc_elasticity(model_elas, 9, 6)*33)`%. This also matches prior beliefs, as we would expect a larger influence of antibiotic consumption reductions in countries with a high consumption, compared to countries with a lower consumption. Although antibiotic consumption is the only parameter used here to estimate AMR levels, in reality this is not the only parameter. This is also clear from the graph above, the R^2^ is `r round(summary(model_elas)$r.squared,2)`, so the correlation is by no means perfect.
+
+### Overview data sources
+
+The input data were used based on literature [@hashiguchiResistanceProportionsEight2019] and export opinion, see table \@ref(tab:amr-ref) for an overview.
+
++-----------------------------------------------+-------------------------------------------+-----------------------------+-----------------------------------------------------+
+| Data                                          | Database                                  | Notes                       | Reference                                           |
++===============================================+===========================================+=============================+=====================================================+
+| Antimicrobial resistance                      | Surveillance Atlas for Infectious Disease |                             | [@europeancentrefordiseasepreventionandcontrolAntimicrobialResistance2021] |
++-----------------------------------------------+-------------------------------------------+-----------------------------+-----------------------------------------------------+
+| Antibiotic consumption                        | ECAC-Net                                  |                             | [@europeancentrefordiseasepreventionandcontrolAntimicrobialConsumptionDatabase]    |
++-----------------------------------------------+-------------------------------------------+-----------------------------+-----------------------------------------------------+
+| Population projections                        | Eurostat                                  |                             | [@eurostatPopulation1stJanuary2021]                                    |
++-----------------------------------------------+-------------------------------------------+-----------------------------+-----------------------------------------------------+
+| Historical demographic data                   |                                           |                             | [@eurostatPopulationJanuaryAge2021]                                     |
++-----------------------------------------------+-------------------------------------------+-----------------------------+-----------------------------------------------------+
+| GDP projections                               | OECD                                      | Used for OECD countries     | [@oecdLongtermBaselineProjections2018]                                        |
++-----------------------------------------------+-------------------------------------------+-----------------------------+-----------------------------------------------------+
+| GDP per capita                                | World Bank                                | Used for non-OECD countries | [@theworldbankGDPCapitaPPP]                                     |
++-----------------------------------------------+-------------------------------------------+-----------------------------+-----------------------------------------------------+
+| Health expenditure projections                | Literature                                |                             | [@changPresentFutureGlobal2019]                     |
++-----------------------------------------------+-------------------------------------------+-----------------------------+-----------------------------------------------------+
+| Out-of-pocket healthcare payments projections | Literature                                |                             | [@changPresentFutureGlobal2019]                     |
++-----------------------------------------------+-------------------------------------------+-----------------------------+-----------------------------------------------------+
+
+Table: (\#tab:amr-ref) Overview data sources AMR model
+
+# Reporting of results
+
+TBA
+
+# R session info
+
+```{r}
+sessionInfo()
+```
+
+# References

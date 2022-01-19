@@ -1,0 +1,13 @@
+country,item,cost,curyear,ref
+nl,hospital stay ward,476,2014,"Hakkaart-van Roijen L, Van der Linden N, Bouwmans CAM, Kanters TA, Tan SS.  Kostenhandleiding. Methodologie van kostenonderzoek en referentieprijzen voor economische evaluaties in de gezondheidszorg. Zorginstituut Nederland. Geactualiseerde versie 2015."
+nl,hospital stay icu,2015,2014,"Hakkaart-van Roijen L, Van der Linden N, Bouwmans CAM, Kanters TA, Tan SS.  Kostenhandleiding. Methodologie van kostenonderzoek en referentieprijzen voor economische evaluaties in de gezondheidszorg. Zorginstituut Nederland. Geactualiseerde versie 2015."
+nl,GP consult,33,2014,"Hakkaart-van Roijen L, Van der Linden N, Bouwmans CAM, Kanters TA, Tan SS.  Kostenhandleiding. Methodologie van kostenonderzoek en referentieprijzen voor economische evaluaties in de gezondheidszorg. Zorginstituut Nederland. Geactualiseerde versie 2015."
+nl,pharmacy fee,13,2020,"https://www.medicijnkosten.nl/toelichting"
+de,hospital stay ward,441,2017,"Excel Duitse kosten"
+de,hospital stay icu,1820,2017,"Excel Duitse kosten"
+de,GP consult,20,2019,"https://www.praktischarzt.de/arzt/hausarzt-gehalt/#:~:text=F%C3%BCr%20den%20ersten%20Besuch%20des,der%20Hausarzt%20kein%20Geld%20mehr."
+de,pharmacy fee,0,2020,"none"
+gb,GP consult,33,2019,"https://www.pssru.ac.uk/pub/uc/uc2020/2-communityhcstaff.pdf"
+gb,pharmacy fee,9.35,2021,"NHS prescription charges - NHS (www.nhs.uk)"
+es,GP consult,89.93,2018,"https://www.boe.es/eli/es/res/2013/07/19/(2)/dof/spa/pdf"
+es,ED consult,108.52,2018,"https://www.boe.es/eli/es/res/2018/01/25/(2)/dof/spa/pdf"

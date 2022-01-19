@@ -1,0 +1,30 @@
+---
+base_utilities:
+  sick:
+    value: .72
+    sd: .21
+    reference: Oppong 2018
+  hospital:
+    value: .7
+    sd: .21
+    reference: none
+  icu:
+    value: .3
+    sd: 0
+    reference: none
+  healthy:
+    value: NA
+    sd: NA
+    reference: RETURN TO POPULATION UTILITIES
+  death:
+    value: 0
+    sd: 0
+    reference: none
+utility_decrements:
+  sick:
+    value: -.08
+    reference: loosely Oppong 2018
+  antibiotic:
+    value: -.1
+    reference: none
+---
