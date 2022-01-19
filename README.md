@@ -1,7 +1,7 @@
 # MERIAM
 This GitHub repository contains the MERIAM model: Modelling the Economics of Respiratory tract Infections and AMr.
 
-A manual can be found [here](https://simonvanderpol.github.io/meriam/).
+A manual can be found [here](https://umcg-global-health.github.io/MERIAM/).
 
 ## License
 The code is licensed under GNU General Public License v3.0.
