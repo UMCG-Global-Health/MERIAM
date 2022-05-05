@@ -65,6 +65,37 @@ results <- map_dfr(iter,
                    ~read_rds(str_c(data_folder, "results_", .x, "_", date,".RDS")))
 
 
+#add training costs
+
+## calculate costs per GP, based on annual training of 39.76 min and consultations of 10 min
+training_duration <- 39.76
+training_cost <- 33 * (training_duration / 10)
+training_cost_ppp <- convert_price(training_cost,
+                                   country = "nl",
+                                   year_in = 2014,
+                                   year_out = 2019,
+                                   input = c("local", "EUR"),
+                                   output = c("ppp", "EUR"),
+                                   eurostat_data = eurostat_financial) 
+
+## add costs every year, based on size of the population
+
+results <- results %>% 
+  mutate(gp_training = map2(pyramid, strategy,
+                                     ~.x %>%
+                                       mutate(n = abs(n)) %>%
+                                       group_by(year) %>%
+                                       summarise(n_pop = sum(n)) %>%
+                                       mutate(n_gp = n_pop / 1470,
+                                              cost_training = n_gp * ifelse(.y == "base",
+                                                                            0,
+                                                                            training_cost_ppp),
+                                              week = 1) %>%
+                                       select(year, week, cost_training)),
+         microsim_aggregated = map2(microsim_aggregated, gp_training,
+                                    ~.x %>% left_join(.y, by = c("year", "week")) %>%
+                                      mutate(cost_training = ifelse(is.na(cost_training), 0, cost_training))))
+
 #get total costs for all iterations
 #convert them to local currency
 
@@ -81,7 +112,7 @@ total_costs <- results %>%
   unnest(microsim_aggregated) %>%
   select(-cost_healthcare, -cost_prod, -cost_hospital, -costs) %>%
   rowwise() %>%
-  mutate(cost_total = cost_abx + cost_consult + cost_test,
+  mutate(cost_total = cost_abx + cost_consult + cost_test + cost_training,
          across(.cols = starts_with("cost_"),
                .fns = ~.x*conversion_factor_local),
          across(.cols = starts_with("cost_"),
@@ -131,6 +162,7 @@ cost_overview %>%
            str_detect(name, "abx") ~ "Antibiotics",
            str_detect(name, "consult") ~ "Consults",
            str_detect(name, "test") ~ "Diagnostic tests",
+           str_detect(name, "training") ~ "Training",
            str_detect(name, "total") ~ "Total"),
          Strategy = case_when(
            Strategy == "base" ~ "Current standard of care",
@@ -140,13 +172,13 @@ cost_overview %>%
          Strategy = factor(Strategy, 
                            levels = c("Hypothetical diagnostic algorithm (\u20ac10)", "Hypothetical diagnostic algorithm (\u20ac5)", "Current standard of care"),
                            ordered = T),
-         item = factor(item, levels = c("Antibiotics", "Diagnostic tests", "Consults"), ordered = TRUE),
+         item = factor(item, levels = c("Antibiotics", "Diagnostic tests", "Training", "Consults"), ordered = TRUE),
          ) %>%
   filter(disc == TRUE, item != "Total") %>%
   ggplot(aes(x = Strategy, y = Costs, fill = item)) +
   geom_col() +
-  facet_wrap(~country, ncol = 1) +
-  scale_fill_manual(values = valuePalette[c(1,2,4)], name = NULL) +
+  #facet_wrap(~country, ncol = 1) +
+  scale_fill_manual(values = valuePalette[c(1,2,6,4)], name = NULL) +
   coord_flip() +
   xlab(NULL) +
   scale_y_continuous(labels = label_dollar(prefix = "\u20ac",
@@ -157,6 +189,7 @@ cost_overview %>%
   theme_value_save()
 
 ggsave("results/crp_nl/costs.png", width = 4, height = 1.5, dpi = 300)
+ggsave("results/crp_nl/costs.pdf", width = 10, height = 5, dpi = 300, bg = "white")
 
 ###REMOVE NA.RM = TRUE
 
@@ -196,16 +229,22 @@ cost_overview_format %>%
     name == "cost_abx" ~ "antibiotics",
     name == "cost_consult" ~ "consults",
     name == "cost_test" ~ "diagnostics",
+    name == "cost_training" ~ "training",
     name == "cost_total" ~ "total",
     name == "disc_cost_abx" ~ "antibiotics",
     name == "disc_cost_consult" ~ "consults",
     name == "disc_cost_test" ~ "diagnostics",
+    name == "disc_cost_training" ~ "training",
     name == "disc_cost_total" ~ "total",
   ),
   country = countrycode(country, origin = "iso2c", destination = "country.name")) %>%
   ungroup %>%
-  select(country, scenario, `Current standard-of-care` = base, `Incremental costs conservative scenario` = diff_conservative, `Incremental costs uncertain scenario` = diff_uncertain) %>%
+  select(country, scenario, 
+         `Current standard-of-care` = base, 
+         `Incremental costs conservative scenario` = diff_conservative, 
+         `Incremental costs uncertain scenario` = diff_uncertain) %>%
   group_by(country) %>%
+  slice(2,1,3,5,4) %>%
   gt("scenario") %>%
   tab_source_note("All costs are discounted and displayed in local currency")
 
@@ -269,6 +308,7 @@ abx_diff %>%
   theme_value_save()
 
 ggsave("results/crp_nl/ab_cons.png", width = 4, height = 2.5, dpi = 300)
+ggsave("results/crp_nl/ab_cons.pdf", width = 10, height = 5, dpi = 300, bg = "white")
 
 
 #create table for appendix
@@ -357,7 +397,6 @@ amr_prsp_agg %>%
   ggplot(aes(x = year, y = amr_med, ymin = amr_lo, ymax = amr_hi, fill = strategy)) +
   geom_line(aes(color = strategy))+
   geom_ribbon(alpha = .2) +
-  facet_wrap(~country, ncol = 3) +
   scale_color_manual(values = c(valuePalette[4], valuePalette[1], valuePalette[2])) +
   scale_fill_manual(values = c(valuePalette[4], valuePalette[1], valuePalette[2])) +
   scale_x_date("Year", breaks = scales::breaks_width("5 years"), labels = scales::label_date("'%y")) +
@@ -365,6 +404,7 @@ amr_prsp_agg %>%
   theme_value_save()
 
 ggsave("results/crp_nl/amr.png", width = 4, height = 2.5, dpi = 300) 
+ggsave("results/crp_nl/amr.pdf", width = 10, height = 5, dpi = 300, bg = "white")
 
 
 total_population <- results %>%
@@ -448,6 +488,7 @@ amr_ceac %>%
 
 
 ggsave("results/crp_nl/amr_ceac.png", width = 4, height = 2.5, dpi = 300)
+ggsave("results/crp_nl/amr_ceac.pdf", width = 10, height = 5, dpi = 300, bg = "white")
 
 pyr <- results %>%
   filter(strategy == "base",

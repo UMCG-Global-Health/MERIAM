@@ -21,3 +21,4 @@ data_input/amr/amr_historical.csv
 data_input/un/WPP2019_Life_Table_Medium.csv
 data_input/un/WPP2019_PopulationBySingleAgeSex_2020-2100.csv
 appendices/crp_nl/nul
+appendices/crp_nl/Appendix_files/figure-latex/*.pdf

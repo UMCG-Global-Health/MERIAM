@@ -1,4 +1,4 @@
-This is pdfTeX, Version 3.141592653-2.6-1.40.23 (TeX Live 2021/W32TeX) (preloaded format=pdflatex 2022.1.14)  14 JAN 2022 15:59
+This is pdfTeX, Version 3.141592653-2.6-1.40.23 (TeX Live 2021/W32TeX) (preloaded format=pdflatex 2022.1.14)  5 MAY 2022 13:17
 entering extended mode
  restricted \write18 enabled.
  %&-line parsing enabled.
@@ -1131,7 +1131,7 @@ rride using the `.groups` argument.[]
  []
 
 
-Overfull \hbox (9.59213pt too wide) in alignment at lines 707--717
+Overfull \hbox (9.59213pt too wide) in alignment at lines 707--718
  [] [] [] [] 
  []
 
@@ -1141,14 +1141,14 @@ Overfull \hbox (9.59213pt too wide) in alignment at lines 707--717
 }) has been already used, duplicate ignored
 <argument> ...shipout:D \box_use:N \l_shipout_box 
                                                   \__shipout_drop_firstpage_...
-l.720 \begin{landscape}
+l.721 \begin{landscape}
                        \begingroup\fontsize{7}{9}\selectfont <./Appendix_files/
 figure-latex/res-demographics-1.pdf>] [17pdfTeX warning (ext4): destination wit
 h the same identifier (name{figure.7}) has been already used, duplicate ignored
 
 <argument> ...shipout:D \box_use:N \l_shipout_box 
                                                   \__shipout_drop_firstpage_...
-l.720 \begin{landscape}
+l.721 \begin{landscape}
                        \begingroup\fontsize{7}{9}\selectfont <./Appendix_files/
 figure-latex/res-incidence-1.pdf>] [18
 
@@ -1202,7 +1202,7 @@ rs/simon/AppData/Roaming/TinyTeX/texmf-dist/fonts/type1/public/lm/lmri7.pfb><c:
 b><c:/Users/simon/AppData/Roaming/TinyTeX/texmf-dist/fonts/type1/public/lm/lmsy
 7.pfb><c:/Users/simon/AppData/Roaming/TinyTeX/texmf-dist/fonts/type1/public/lm/
 lmtt10.pfb>
-Output written on Appendix.pdf (23 pages, 1467773 bytes).
+Output written on Appendix.pdf (23 pages, 1468264 bytes).
 PDF statistics:
  529 PDF objects out of 1000 (max. 8388607)
  450 compressed objects within 5 object streams
